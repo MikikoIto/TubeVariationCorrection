@@ -400,6 +400,7 @@ if __name__ == "__main__":
     #input variables
     LinePosition, tubeVolt, tubeCurr = 150.0, 60, 0.5
     cnt_iter = 0
+    list_indxCurr = [0, 0, 0, 0, 0, 0, 0]
 
     tvc = TVC()
 
@@ -407,6 +408,12 @@ if __name__ == "__main__":
     tvc.setPosLine(LinePosition)
     tvc.setTubeVoltage(tubeVolt)
     tvc.setTubeCurrent(tubeCurr)
-    #tvc.saveDACindex(list_indxCurr)  # 처음에 CAL 시작할 때 시작 DAC index list 파일 생성
-    list_indxCurr = tvc.readDACindex()
-    print("list_indxDAC: ", list_indxCurr)
+    tvc.saveDACindex(list_indxCurr)  # 처음에 CAL 시작할 때 시작 DAC index list 파일 생성
+    while not tvc.isCALfinished() or cnt_iter<3:
+        list_indxCurr = tvc.readDACindex()
+        print("list_indxDAC: ", list_indxCurr)
+        tvc.setCurrentIndex(list_indxCurr)
+        list_newDACindx = tvc.run()  # get new DAC index
+        print("Get NEW DAC index: ", list_newDACindx)
+        tvc.saveDACindex(list_newDACindx)
+        cnt_iter+=1
