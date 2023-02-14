@@ -44,9 +44,11 @@ class TVC():
 
     def initVariables(self):
         """initialize status variables"""
-        self.status_CALfinished = False
-        self.status_running = False
-        self.cnt_iter = 0
+        self.status_CALfinished=False
+        self.status_running=False
+        self.cnt_iter=0
+        self.list_indxCurr_diff=[0]*self.CONST_Ntube
+        self.list_intst_prev=[0]*self.CONST_Ntube
 
     def _createDir(self, dirPath):
         if not os.path.exists(dirPath):
@@ -92,7 +94,7 @@ class TVC():
         self.DEBUG = False
 
     def setTarget(self, val): #val: intensity
-        self.Target = int(val)
+        self.targetIntensity = int(val)
 
     def setPosLine(self, val): # val = position of Tube array [mm]   0-150 mm
         self._calculateTubeCenter()  # calculate Tube centers
@@ -152,9 +154,10 @@ class TVC():
 
         for i, f in enumerate(self.fileList):
             if i<11:
-                self._moveFileArchive(f)
+                if (self.ArchiveON): self._moveFileArchive(f)
             else:
-                if i%2 == 0: self._moveFileArchive(f)
+                if i%2 == 0:
+                    if (self.ArchiveON): self._moveFileArchive(f)
                 else:
                     list_datafile.append(f)
 
@@ -169,7 +172,7 @@ class TVC():
             TotalN_pixels = (len(fileContent)) // 2
             data_1D = struct.unpack("H" * TotalN_pixels, fileContent)  # "H" = 16-bit unsigned
             data_1D = np.asarray(data_1D)
-            data_2D = np.reshape(data_1D, (self.Npixel_y, self.Npixel_x))
+            data_2D = np.reshape(data_1D, (self.CONST_Npixel_y, self.CONST_Npixel_x))
         return data_2D
 
     def _showImage(self, data_2D, xx=[], yy=[], style='-r', tit='DATA name', xl='x_index', yl='y_index', saveOption=False):
@@ -246,8 +249,8 @@ class TVC():
         list_intst = []
         # need to set position of Line(tube array) using setPosLine()
         # Case_01 : check if all files were saved after line-mode exposure
-        if self._checkALLFilesSaved(directory):  # len(fileList) == 25: Dummy Files + data Files
-            if self._deleteDummyFiles():  # delete Dummy file --> len(fileList) == 7 : TVC starts
+        if self._checkALLFilesSaved(directory):  # len(fileList) >= 25: Dummy Files + data Files
+            if self._deleteDummyFiles():  # taking first 25 files and delete Dummy file --> len(fileList) == 7 : TVC starts
                 for iTube, f in enumerate(self.fileList):
                     print(iTube, self.DirectoryCAL + f)
                     img = self._readData(directory + f)
@@ -268,7 +271,7 @@ class TVC():
         list_intensity = [i for i in list_intst]
         list_intensity.sort()
         new_target = sum(list_intensity[1:-1])/len(list_intensity[1:-1])
-        print("---- set NEW target to self.Target: ", self.Target, '  -->  ', new_target)
+        print("---- set NEW target to self.Target: ", self.targetIntensity, '  -->  ', new_target)
         self.setTarget(new_target)
 
 
@@ -277,34 +280,50 @@ class TVC():
         self.cnt_iter += 1
         print(self.cnt_iter, "--- Calculate New DAC index for Current ---")
 
+        newIndxCurr_original = []
         newIndxCurr = []
+        print("id, intensity, DAC_orig, diff_target, DAC_diff, NEW DAC")
         for i, intst in enumerate(self.list_intst):
-            newIndx = int(self.list_indxCurr[i] - (intst - self.Target)/self.list_DAC_LSB[i])
-            print(i, intst, "new index: ", self.list_indxCurr[i], (intst - self.Target), int((intst - self.Target)/self.list_DAC_LSB[i]), newIndx)
+            newIndx = int(self.list_indxCurr[i] - (intst - self.targetIntensity)/self.list_DAC_LSB[i])
+            diff = newIndx - self.list_indxCurr[i]
+            newIndxCurr_original.append(newIndx)
+
+            if not self.list_indxCurr_diff[i] == 0: # (n_iter == 0: newIndx 계산값 그대로 적용하는 경우)를 제외한 경우
+                if abs(diff)<=5:
+                    newIndx = self.list_indxCurr[i]
+                elif not np.sign(diff) == np.sign(self.list_indxCurr_diff[i]):
+                    newDAC_LSB = (intst - self.list_intst_prev[i])/self.list_indxCurr_diff[i]
+                    print(i, "---------- DAT_LSB was updated ---------\n new DAC_LSB: ", self.list_DAC_LSB[i], " ---> ", newDAC_LSB)
+                    self.list_DAC_LSB[i] = newDAC_LSB
+                    newIndx = int(self.list_indxCurr[i] - (intst - self.targetIntensity)/newDAC_LSB)
+
+            self.list_indxCurr_diff[i] = diff
+            print(i, intst, self.list_indxCurr[i], (intst - self.targetIntensity), -int((intst - self.targetIntensity)/self.list_DAC_LSB[i]), newIndx)
             newIndxCurr.append(newIndx)
         self._addDateIterINFO(newIndxCurr)
         self._writeCSV(self.DirectoryLog + self.LOGfile_indxCurr, newIndxCurr)
-        print("NEW DAC index: ", newIndxCurr)
+        print("original new DAC: ", newIndxCurr_original)
+        print("NEW DAC index: ", newIndxCurr[2:])
         return newIndxCurr[2:]
 
     def _calculateVariance(self):
         self._showHistVariance()
         for intst in self.list_intst:
-            if abs(self.Target - intst)>self.Target*self.limitVariation: return False
+            if abs(self.targetIntensity - intst)>self.targetIntensity*self.limitVariation: return False
         return True
 
     def _showHistVariance(self):
         x, y = np.arange(self.CONST_Ntube), self.list_intst
         id = ['Tube_{num}'.format(num = n) for n in range(self.CONST_Ntube)]
         xmin, xmax = -0.8, self.CONST_Ntube - 0.2
-        ymin, ymax = self.Target*(1 - self.limitVariation), self.Target*(1 + self.limitVariation)
+        ymin, ymax = self.targetIntensity*(1 - self.limitVariation), self.targetIntensity*(1 + self.limitVariation)
 
 
         plt.subplots(figsize=(10, 8))
         plt.fill([xmin, xmin, xmax, xmax], [ymin, ymax, ymax, ymin], color='lightgray', alpha=0.5)
         plt.bar(x, y)
         plt.hlines(ymax, xmin=xmin, xmax=xmax, colors='r', linestyles='dashdot')
-        plt.hlines(self.Target, xmin=xmin, xmax=xmax, colors='r', linestyles='solid')
+        plt.hlines(self.targetIntensity, xmin=xmin, xmax=xmax, colors='r', linestyles='solid')
         plt.hlines(ymin, xmin=xmin, xmax=xmax, colors='r', linestyles='dashdot')
         plt.xlim(xmin, xmax)
         plt.xticks(x, id)
@@ -386,7 +405,7 @@ class TVC():
 
 
     def run(self, n_iter):
-        self.ArchiveON = False
+        self.ArchiveON = True
         self.status_running = True
         #self.list_indxCurr = self._setCurrentIndex(list_indxCurr)
         self.list_intst = self._getListIntensity(self.DirectoryCAL)
@@ -396,7 +415,7 @@ class TVC():
         print("--- list of intensity: ", self.list_intst, '\n--- list of new DAC index for TubeCurr.: ', self.list_indxCurr)
         list_newIndxCurr = self._calculateNewIndxCurr()
         self.status_running = False
-        print("Get NEW DAC index: ", list_newIndxCurr)
+        self.list_intst_prev = [self.list_intst[i] for i in range(self.CONST_Ntube)]
         return list_newIndxCurr
 
 if __name__ == "__main__":
