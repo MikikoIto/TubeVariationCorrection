@@ -38,15 +38,15 @@ class TVC():
         # Variables which should be defined in advance
         self.waitingTime = 100
         self.targetIntensity = 3700                     # Need to be defined
-        self.limitVariation = 0.05                      # Target +/-10%
+        self.limitVariation = 0.03                      # Target +/-3%
         self.list_DAC_LSB = [9.13]*self.CONST_Ntube     # intensity increase per 1 DAC
         self.CONST_Nfiles = 25                          # 11 Dummy + (shot + dummy)X7
 
     def initVariables(self):
         """initialize status variables"""
+        self.n_iter = 0
         self.status_CALfinished=False
         self.status_running=False
-        self.cnt_iter=0
         self.list_indxCurr_diff=[0]*self.CONST_Ntube
         self.list_intst_prev=[0]*self.CONST_Ntube
 
@@ -223,7 +223,7 @@ class TVC():
         today = date.today()
         d = today.strftime("%Y-%m-%d")
         if len(list) == self.CONST_Ntube:
-            list.insert(0, self.cnt_iter)
+            list.insert(0, self.n_iter)
             list.insert(0, d)
         else:
             raise Exception("E00: The number of Current index is not the same as the number of tubes.")
@@ -277,8 +277,7 @@ class TVC():
 
 
     def _calculateNewIndxCurr(self):
-        self.cnt_iter += 1
-        print(self.cnt_iter, "--- Calculate New DAC index for Current ---")
+        print(self.n_iter, "--- Calculate New DAC index for Current ---")
 
         newIndxCurr_original = []
         newIndxCurr = []
@@ -301,24 +300,26 @@ class TVC():
             print(i, intst, self.list_indxCurr[i], (intst - self.targetIntensity), -int((intst - self.targetIntensity)/self.list_DAC_LSB[i]), newIndx)
             newIndxCurr.append(newIndx)
         self._addDateIterINFO(newIndxCurr)
-        self._writeCSV(self.DirectoryLog + self.LOGfile_indxCurr, newIndxCurr)
-        print("original new DAC: ", newIndxCurr_original)
-        print("NEW DAC index: ", newIndxCurr[2:])
+        if not self.status_CALfinished:
+            self._writeCSV(self.DirectoryLog + self.LOGfile_indxCurr, newIndxCurr)
+            print("original new DAC: ", newIndxCurr_original)
+            print("NEW DAC index: ", newIndxCurr[2:])
+        else:
+            print("!!! CAL finished !!! -- final DAC index: ", self.list_indxCurr)
         return newIndxCurr[2:]
 
     def _calculateVariance(self):
-        self._showHistVariance()
         for intst in self.list_intst:
             if abs(self.targetIntensity - intst)>self.targetIntensity*self.limitVariation: return False
         return True
 
-    def _showHistVariance(self):
+    def _showHistVariance(self, list_newDAC):
         x, y = np.arange(self.CONST_Ntube), self.list_intst
         id = ['Tube_{num}'.format(num = n) for n in range(self.CONST_Ntube)]
         xmin, xmax = -0.8, self.CONST_Ntube - 0.2
         ymin, ymax = self.targetIntensity*(1 - self.limitVariation), self.targetIntensity*(1 + self.limitVariation)
 
-
+        path_outputPNG = self.Directory + "/Histo_TubeIntensity_iter{n}.png".format(n=self.n_iter)
         plt.subplots(figsize=(10, 8))
         plt.fill([xmin, xmin, xmax, xmax], [ymin, ymax, ymax, ymin], color='lightgray', alpha=0.5)
         plt.bar(x, y)
@@ -328,7 +329,14 @@ class TVC():
         plt.xlim(xmin, xmax)
         plt.xticks(x, id)
         plt.ylabel('X-ray image intensity')
-        plt.title("Variation of X-ray tube output at iter#_{num}".format(num=self.cnt_iter))
+        if self.status_CALfinished:
+            plt.title("Variation of X-ray tube output at iter#_{num}\n {DAC_old} --> FINAL DAC index".format(num=self.n_iter,
+                                                                                                DAC_old=self.list_indxCurr))
+        else:
+            plt.title("Variation of X-ray tube output at iter#_{num}\n {DAC_old} --> {DAC_new}".format(num=self.n_iter,
+                                                                                                   DAC_old=self.list_indxCurr,
+                                                                                                   DAC_new=list_newDAC))
+        plt.savefig(path_outputPNG)
         plt.show()
 
     def checkUniformity(self, directory, MODE_rename):
@@ -405,9 +413,9 @@ class TVC():
 
 
     def run(self, n_iter):
+        self.n_iter = n_iter
         self.ArchiveON = True
         self.status_running = True
-        #self.list_indxCurr = self._setCurrentIndex(list_indxCurr)
         self.list_intst = self._getListIntensity(self.DirectoryCAL)
         if int(n_iter) == 0: self._calculateNewTarget(self.list_intst)
         self.status_CALfinished = self._calculateVariance()
@@ -416,6 +424,7 @@ class TVC():
         list_newIndxCurr = self._calculateNewIndxCurr()
         self.status_running = False
         self.list_intst_prev = [self.list_intst[i] for i in range(self.CONST_Ntube)]
+        self._showHistVariance(list_newIndxCurr)
         return list_newIndxCurr
 
 if __name__ == "__main__":
@@ -438,5 +447,5 @@ if __name__ == "__main__":
         print("list_indxDAC: ", list_indxCurr)
         tvc.setCurrentIndex(list_indxCurr)
         list_newDACindx = tvc.run(cnt_iter)  # get new DAC index
-        tvc.saveDACindex(list_newDACindx)
+        if not tvc.isCALfinished(): tvc.saveDACindex(list_newDACindx)
         cnt_iter+=1
