@@ -19,7 +19,6 @@ class TVC():
     def __init__(self):
         self.DEBUG = False
 
-
         self.LOGfile_indxCurr = 'LOG_indxCurr.csv'
         self.LOGfile_intst = 'LOG_intst.csv'
         # detector parameters
@@ -139,21 +138,28 @@ class TVC():
             sleep(1)
             cnt += 1
             self.fileList = os.listdir(directory)
-            if len(self.fileList) == self.CONST_Nfiles: return True
+            if len(self.fileList) >= self.CONST_Nfiles: return True
 
         if cnt >= 10: raise Exception("E01: we cannot find {N} files in {dir}".format(N=self.Ntube, dir=self.DirectoryCAL))
         return False
 
-    def _deleteDummyFiles(self, directory):
-        if not len(self.fileList) == self.Nfiles:
+    def _deleteDummyFiles(self):
+        if not len(self.fileList) >= self.CONST_Nfiles:
             raise Exception("Warning!!! len(self.fileList) != 25, please check # of files in the CAL directory")
+        # select first 25 files in fileList (18 Dummy files + 7 Data files)
+        self.fileList = self.fileList[:self.CONST_Nfiles]
+        list_datafile = []
+
         for i, f in enumerate(self.fileList):
-            if i<11: self._moveFileArchive(f)
+            if i<11:
+                self._moveFileArchive(f)
             else:
                 if i%2 == 0: self._moveFileArchive(f)
+                else:
+                    list_datafile.append(f)
 
-        self.fileList = os.listdir(directory)
-        if len(self.fileList) == self.Ntube: return True
+        self.fileList = list_datafile
+        if len(self.fileList) == self.CONST_Ntube: return True
         return False
 
 
@@ -227,10 +233,7 @@ class TVC():
 
     def _moveFilesArchive(self):
         for filename in self.fileList:
-            outputname = "itr" + str(self.cnt_iter) + '_' + filename[:-4]
-            src = os.path.join(self.DirectoryCAL, filename)
-            dst = os.path.join(self.DirectoryArchive, outputname)
-            os.rename(src, dst)
+            self._moveFileArchive(filename)
 
     def _moveFileArchive(self, filename):
         src = os.path.join(self.DirectoryCAL, filename)
@@ -244,7 +247,7 @@ class TVC():
         # need to set position of Line(tube array) using setPosLine()
         # Case_01 : check if all files were saved after line-mode exposure
         if self._checkALLFilesSaved(directory):  # len(fileList) == 25: Dummy Files + data Files
-            if self._deleteDummyFiles(directory):  # delete Dummy file --> len(fileList) == 7 : TVC starts
+            if self._deleteDummyFiles():  # delete Dummy file --> len(fileList) == 7 : TVC starts
                 for iTube, f in enumerate(self.fileList):
                     print(iTube, self.DirectoryCAL + f)
                     img = self._readData(directory + f)
@@ -382,17 +385,18 @@ class TVC():
         return self._readCSV(file_path)
 
 
-    def run(self):
+    def run(self, n_iter):
         self.ArchiveON = False
-
         self.status_running = True
         #self.list_indxCurr = self._setCurrentIndex(list_indxCurr)
         self.list_intst = self._getListIntensity(self.DirectoryCAL)
-        self._calculateNewTarget(self.list_intst)
+        if int(n_iter) == 0: self._calculateNewTarget(self.list_intst)
         self.status_CALfinished = self._calculateVariance()
+        print("status_CALfinished: ", self.status_CALfinished)
         print("--- list of intensity: ", self.list_intst, '\n--- list of new DAC index for TubeCurr.: ', self.list_indxCurr)
         list_newIndxCurr = self._calculateNewIndxCurr()
         self.status_running = False
+        print("Get NEW DAC index: ", list_newIndxCurr)
         return list_newIndxCurr
 
 if __name__ == "__main__":
@@ -410,10 +414,10 @@ if __name__ == "__main__":
     tvc.setTubeCurrent(tubeCurr)
     tvc.saveDACindex(list_indxCurr)  # 처음에 CAL 시작할 때 시작 DAC index list 파일 생성
     while not tvc.isCALfinished() or cnt_iter<3:
+        print("\n  --- new iteration: {n_iter} --- ".format(n_iter=cnt_iter))
         list_indxCurr = tvc.readDACindex()
         print("list_indxDAC: ", list_indxCurr)
         tvc.setCurrentIndex(list_indxCurr)
-        list_newDACindx = tvc.run()  # get new DAC index
-        print("Get NEW DAC index: ", list_newDACindx)
+        list_newDACindx = tvc.run(cnt_iter)  # get new DAC index
         tvc.saveDACindex(list_newDACindx)
         cnt_iter+=1
